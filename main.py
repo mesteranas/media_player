@@ -1,6 +1,7 @@
 import sys
 from custome_errors import *
 sys.excepthook = my_excepthook
+import os
 import pyperclip
 import vlc
 import gui
@@ -14,15 +15,20 @@ from PyQt6.QtCore import Qt
 language.init_translation()
 import os
 try:
-    os.add_dll_directory(os.path.join(settings_handler.get("g","path"),"data","dlls"))
+    os.add_dll_directory(os.path.join(settings_handler.get("g","path")))
 except:
-    os.add_dll_directory(os.path.join(os.getcwd(),"data","dlls"))
+    os.add_dll_directory(os.path.join(os.getcwd()))
+
 class main (qt.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(app.name + _("version : ") + str(app.version))
         self.path="None"
         self.type="None"
+        self.folder_play=False
+        self.folder_files=[]
+        self.folder_path=""
+        self.folder_index=0
         layout=qt.QVBoxLayout()
         self.instance = vlc.Instance()
         self.player = self.instance.media_player_new()
@@ -158,6 +164,28 @@ class main (qt.QMainWindow):
         player.addAction(info)
         info.triggered.connect(self.oninfo)
         info.setShortcut("i")
+        self.MF=mb.addMenu(_("folder"))
+        self.MF.setDisabled(True)
+        nextf=qt1.QAction(_("next file"),self)
+        nextf.triggered.connect(lambda: self.control(0))
+        nextf.setShortcut("tab")
+        self.MF.addAction(nextf)
+        bref=qt1.QAction(_("previous"),self)
+        bref.triggered.connect(lambda: self.control(1))
+        bref.setShortcut("shift+tab")
+        self.MF.addAction(bref)
+        firstf=qt1.QAction(_("go to first file"),self)
+        firstf.triggered.connect(lambda: self.control(2))
+        firstf.setShortcut("home")
+        self.MF.addAction(firstf)
+        lastf=qt1.QAction(_("go to last file"),self)
+        lastf.triggered.connect(lambda: self.control(3))
+        lastf.setShortcut("end")
+        self.MF.addAction(lastf)
+        gototime=qt1.QAction(_("go to  file"),self)
+        gototime.triggered.connect(lambda:gui.GoToFile(self).exec())
+        gototime.setShortcut("ctrl+g")
+        self.MF.addAction(gototime)
         help=mb.addMenu(_("help"))
         cus=help.addMenu(_("contact us"))
         telegram=qt1.QAction("telegram",self)
@@ -182,6 +210,7 @@ class main (qt.QMainWindow):
             self.player.play()
             self.path=file.selectedFiles()[0]
             self.type="file"
+            self.MF.setDisabled(True)
     def oplay(self):
         if self.player.get_state()!=vlc.State.Ended:
             if self.player.is_playing():
@@ -189,7 +218,8 @@ class main (qt.QMainWindow):
             else:
                 self.player.play()
         else:
-            self.player.stop()
+            media = self.instance.media_new(self.path)
+            self.player.set_media(media)
             self.player.play()
     def ourl(self):
         text,ok=qt.QInputDialog.getText(self,_("url"),_("type the link "))
@@ -199,6 +229,7 @@ class main (qt.QMainWindow):
             self.player.play()
             self.path=text
             self.type="link"
+            self.MF.setDisabled(True)
     def ofast(self,a):
         state=self.player.get_rate()
         if state==0.1:
@@ -233,11 +264,21 @@ class main (qt.QMainWindow):
         return u,m,s
     def onpaste(self):
         text=pyperclip.paste()  
-        media = self.instance.media_new(text)
-        self.player.set_media(media)
-        self.player.play()
-        self.path=text
-        self.type="file or link"
+        if os.path.isdir(text):
+            self.getFiles(text)
+            if len(self.folder_files)>0:
+                self.playMedia(os.path.join(self.folder_path,self.folder_files[0]))
+                self.MF.setDisabled(False)
+                self.folder_index=0
+            else:
+                qt.QMessageBox.information(self,_("error"),_("no media files in this folder"))
+        else:
+            media = self.instance.media_new(text)
+            self.player.set_media(media)
+            self.player.play()
+            self.path=text
+            self.type="file or link"
+            self.MF.setDisabled(True)
     def oninfo(self):
         qt.QMessageBox.information(self,_("file info"),_("media type {} current file {} current volume {} curren rate {} elapsed time {} remaining time {} duration {}").format(self.type,self.path,str(self.player.audio_get_volume()),str(self.player.get_rate()),self.timeformat(self.getdu(self.player.get_time())),self.timeformat(self.getdu(self.player.get_length()-self.player.get_time())),self.timeformat(self.getdu(self.player.get_length()))))
     def timeformat(self,time):
@@ -253,14 +294,59 @@ class main (qt.QMainWindow):
         t.append(_(" {} seconds").format(str(time[2])))
         return " ".join(t)
     def ostop(self):
-        self.player.stop()
-        self.player.play()
-        # self.player.pause()
+        if self.player.get_state()!=vlc.State.Ended:
+            if self.player.is_playing():
+                self.player.pause()
+        else:
+            media = self.instance.media_new(self.path)
+            self.player.set_media(media)
+        self.player.set_time(0)
     def ofolder(self):
         dialog = qt.QFileDialog()
         dialog.setFileMode(qt.QFileDialog.FileMode.Directory)
         if dialog.exec() == qt.QFileDialog.DialogCode.Accepted:
-            print(dialog.selectedFiles()[0])
+            self.getFiles(dialog.selectedFiles()[0])
+            if len(self.folder_files)>0:
+                self.playMedia(os.path.join(self.folder_path,self.folder_files[0]))
+                self.MF.setDisabled(False)
+                self.folder_index=0
+            else:
+                qt.QMessageBox.information(self,_("error"),_("no media files in this folder"))
+    def getFiles(self,path):
+        l=os.listdir(path)
+        self.folder_path=path
+        self.folder_files=[]
+        formats=['mp3','mp4','ogg','m4a','wav','occ']
+        for file in l:
+            for format in formats:
+                if file.endswith(format):
+                    self.folder_files.append(file)
+                    break
+        return self.folder_files
+    def playMedia(self,path):
+        media = self.instance.media_new(path)
+        self.player.set_media(media)
+        self.player.play()
+        self.path=path
+        self.type="folder"
+    def control(self,i):
+        if i==0:
+            if self.folder_index==len(self.folder_files)-1:
+                a=0
+            else:
+                a=self.folder_index+1
+        elif i==1:
+            if self.folder_index==0:
+                a=len(self.folder_files)-1
+            else:
+                a=self.folder_index-1
+        elif i==2:
+            a=0
+        elif i==3:
+            a=len(self.folder_files)-1
+        self.playMedia(os.path.join(self.folder_path,self.folder_files[a]))
+        self.MF.setDisabled(False)
+        self.folder_index=a
 App=qt.QApplication([])
 w=main()
 w.show()
